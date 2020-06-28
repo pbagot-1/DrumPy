@@ -13,7 +13,7 @@ Click "Clone" and "Download ZIP", Extract zip somewhere and move python script i
 ## Usage
 Run a shell with admin privileges and type
 ```shell
-python wavs.py
+python drumpy.py
 ```
 ![Screenshot](example.png)
 
