@@ -1,48 +1,20 @@
 from scipy.io.wavfile import read
-from os import listdir
-from os.path import isfile, join, dirname, realpath, getsize, isdir
-from os import replace, mkdir, symlink, remove, system
-import ctypes
-import queue
+import os
 from shutil import copyfile
+from numpy import ndarray
+import stat
+import queue
 
+q = queue.Queue()
 savings = 0.0
+dirsExplored = 0
+filesChecked = 0
 hashTable = {}
 mapping = {}
 listOfLists = []
 listOfDuplicateLocations = []
 listOfOriginalLocationsToUse = set()
-q = queue.Queue()
-dirsExplored = 0
-filesChecked = 0
-
-    
-def hashImpl(str1):
-    try:
-        global savings
-        global hashTable
-        global listOfDuplicateLocations
-        global listOfOriginalLocationsToUse
-        global mapping
-        
-        print("working on... : " + str(str1[0]))
-        a = read(str1[0])
-        #skip longer than 15 seconds samples
-        if ((1.0*len(a[1])) / (1.0*a[0])) > 15.0:
-            return
-        #print(str(a[1]))
-        #print(a[1].tobytes().__class__.__name__)
-        if a[1].tobytes()[0:1408000] in hashTable:
-            listOfDuplicateLocations.append(str1[0])
-            hold = hashTable[a[1].tobytes()[0:1408000]]
-            listOfOriginalLocationsToUse.add(hold)
-            print("duplicate found: " + hold + " is what was found for this one called " + str1[0])
-            mapping[str1[0]] = hold
-            savings += str1[1]
-        else:
-            hashTable[a[1].tobytes()[0:1408000]] = str1[0]
-    except (UnboundLocalError, ValueError) as e:
-        1 + 1
+gaugeLoad = 0
 
 def main():
     global q
@@ -50,93 +22,171 @@ def main():
     global dirsExplored
     global listOfDuplicateLocations
     global listOfOriginalLocationsToUse
+    global savings
     
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    
+    try:
+        file = open("testPrivs.txt", "w") 
+        file.close()
+        os.symlink("testPrivs.txt", "testPrivs(sym).txt")
+    except OSError:
+        print("Please run program as administrator so it can make symbolic links")
+        os.remove("testPrivs.txt")
+        return
+    os.remove("testPrivs.txt")
+    os.remove("testPrivs(sym).txt")
+    
+    dirsExplored += 1
 
-    dirsExplored = dirsExplored + 1 
-     
-    dir_path = dirname(realpath(__file__))
-    print(dir_path)
-
-    onlyfiles = [(f, getsize(join(dir_path, f))) for f in listdir(dir_path) if isfile(join(dir_path, f)) and f[len(f) - 4:len(f)] == ".wav"]
+    onlyfiles = [(f, os.path.getsize(os.path.join(dir_path, f))) for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)) and f[len(f) - 4:len(f)] == ".wav"]
     for strx in onlyfiles:
         filesChecked = filesChecked + 1
         hashImpl(strx)
-    onlyDirs = [join(dir_path, f) for f in listdir(dir_path) if not isfile(join(dir_path, f))]
+    onlyDirs = [os.path.join(dir_path, f) for f in os.listdir(dir_path) if not os.path.isfile(os.path.join(dir_path, f))]
     for dir in onlyDirs:
         q.put(dir)
     while (q.empty() is False):
         handleThisDir(q.get())
-    #print(onlyDirs)
     
+    for item in listOfOriginalLocationsToUse:
+           savings = savings - os.path.getsize(item)
     print("You can save " + '{:.10f}'.format(savings/1073741824) + " gigabytes of space if you delete the duplicates!")
     print("Files checked: " + str(filesChecked))
     print("Directories explored: " + str(dirsExplored))
-    response = input("Would you like to delete "  +  '{:.10f}'.format(savings/1073741824) + " worth of redundant wav files and move a single copy of each to a new folder? [Y/N]: ")
+    print("Number of duplicates found: " + str(len(listOfDuplicateLocations)))
+    print("Number of unique drums in the new combined kit: " + str(len(listOfOriginalLocationsToUse)))
+    response = input("Would you like to delete "  +  '{:.10f}'.format(savings/1073741824) + " gigabytes worth of redundant wav files and move a single copy of each to a new folder? [Y/N]: ")
     if response == 'Y':
         handleMigration()
-    
+        
+    print('[{0}]\r'.format(20*"#"), end="", flush=True)  
+    print("Done.")
+ 
+
+def hashImpl(str1):
+    try:
+        global savings
+        global hashTable
+        global listOfDuplicateLocations
+        global listOfOriginalLocationsToUse
+        global mapping
+
+        print("working on... : " + str(str1[0]))
+        a = read(str1[0])
+        
+        #skip longer than 10 seconds samples
+        if ((1.0*len(a[1])) / (1.0*a[0])) > 10.0:
+            return
+            
+        type = a[1].dtype
+        index = 0
+        sizeOf = len(a[1])
+        
+        if not isinstance(a[1][0], ndarray):
+            while(index != sizeOf and a[1][index] == 0):
+                index += 1
+        elif len(a[1][0]) == 2:
+            while(index != sizeOf and a[1][index][0] == 0 and a[1][index][1] == 0):
+                index += 1
+                
+        if (index == sizeOf):
+            return
+            
+        if a[1][index:index + 10000].tobytes() in hashTable:
+            listOfDuplicateLocations.append(str1[0])
+            hold = hashTable[a[1][index:index + 10000].tobytes()]
+            listOfOriginalLocationsToUse.add(hold)
+            print("duplicate found: " + hold + " is what was found for: " + str1[0])
+            mapping[str1[0]] = hold
+            savings += str1[1]
+        else:
+            hashTable[a[1][index:index + 10000].tobytes()] = str1[0]            
+    except (UnboundLocalError, ValueError) as e:
+        1 + 1
+
+def printLoad(num):
+    global gaugeLoad
+
+    minDif = float('inf')
+    index = 0
+    for j in range (0, 20):
+        if abs(float(num)/gaugeLoad - j/20) < minDif:
+            minDif = abs(float(num)/gaugeLoad - j/20)
+            index = j
+            
+    #print(f'[{index*"#"}{" "*(20-index)}]\r', end="", flush=True)        
+    print('[{0}{1}]\r'.format(index*"#", " "*(20-index)), end="", flush=True)  
 def handleMigration():
     global listOfDuplicateLocations
     global listOfOriginalLocationsToUse
     global mapping
-    
-    dir_path = dirname(realpath(__file__))
-    #mkdir("duplicate drums")
-    """for orig in listOfOriginalLocationsToUse:
-        newPath = dir_path+"\\duplicate drums\\" + orig.split("\\")[len(orig.split("\\")) - 1]
-        copyfile(orig, newPath)"""
-       
+    global gaugeLoad
+    loader = 0
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    gaugeLoad = len(listOfDuplicateLocations) + len(listOfOriginalLocationsToUse)*2 
     #move the designated unique ones to a new folder and make symbolic links for them
-    #dir_path = dirname(realpath(__file__))
-    if isdir(dir_path+"\\duplicate drums"):
+    #dir_path = os.path.dirname(os.path.realpath(__file__))
+    if os.path.isdir(dir_path+"\\duplicate drums"):
         raise OSError("directory " + dir_path + "\\duplicate drums" + " already exists, so rename this directory so name can be used")
         return
     else:
-        mkdir("duplicate drums")
+        print('[{0}]\r'.format(" "*(20)), end="", flush=True)  
+        os.mkdir("duplicate drums")
         for orig in listOfOriginalLocationsToUse:
             newPath = dir_path+"\\duplicate drums\\" + orig.split("\\")[len(orig.split("\\")) - 1]
-            replace(orig, newPath)
+            os.replace(orig, newPath)
               
             # Create a symbolic link 
             # pointing to src named dst 
-            # using os.symlink() method 
-            symlink(newPath, orig) 
-            system("attrib /L +h \"" + orig + "\"")              
-            #print("Symbolic link created successfully for " + orig) 
+            # using os.os.symlink() method 
+            os.symlink(newPath, orig) 
+            os.system("attrib /L +h \"" + orig + "\"")
+            loader += 1  
+            if loader % 50 == 0:
+                printLoad(loader)
 
     #deletes the copies and makes symbolic links for them
     for dup in listOfDuplicateLocations:
         mapped = mapping[dup]
         newPath = dir_path+"\\duplicate drums\\" + mapped.split("\\")[len(mapped.split("\\")) - 1]
-        remove(dup)
-        symlink(newPath, dup) 
-        system("attrib /L +h \"" + dup + "\"")
-        #print("Symbolic link created successfully for " + dup)
+        os.chmod(dup, stat.S_IWRITE)
+        os.remove(dup)
+        os.symlink(newPath, dup) 
+        os.system("attrib /L +h \"" + dup + "\"")
+        loader += 1            
+        if loader % 50 == 0:
+            printLoad(loader)     
+        
     
-    organizeFiles()    
+    organizeFiles(loader)   
+    
 #organizes all the files in the duplicate drums folder into 808s, claps, kicks, snares, percs, fx, etc
-def organizeFiles():
-    dir_path = dirname(realpath(__file__))+"\\duplicate drums\\"
-    mkdir("duplicate drums\\808s")
-    mkdir("duplicate drums\\claps")
-    mkdir("duplicate drums\\kicks")
-    mkdir("duplicate drums\\hi hats")
-    mkdir("duplicate drums\\crashes cymbals rides")
-    mkdir("duplicate drums\\open hats")
-    mkdir("duplicate drums\\transitions")
-    mkdir("duplicate drums\\snares")
-    mkdir("duplicate drums\\percs")
-    mkdir("duplicate drums\\hits")
-    mkdir("duplicate drums\\fx")
-    mkdir("duplicate drums\\vox")
-    mkdir("duplicate drums\\random")
-    onlyfiles = [f for f in listdir(dir_path) if isfile(join(dir_path, f)) and f[len(f) - 4:len(f)] == ".wav"]
+def organizeFiles(loader):
+    dir_path = os.path.dirname(os.path.realpath(__file__))+"\\duplicate drums\\"
+    os.mkdir("duplicate drums\\808s")
+    os.mkdir("duplicate drums\\claps")
+    os.mkdir("duplicate drums\\kicks")
+    os.mkdir("duplicate drums\\hi hats")
+    os.mkdir("duplicate drums\\crashes cymbals rides")
+    os.mkdir("duplicate drums\\open hats")
+    os.mkdir("duplicate drums\\transitions")
+    os.mkdir("duplicate drums\\snares")
+    os.mkdir("duplicate drums\\percs")
+    os.mkdir("duplicate drums\\hits")
+    os.mkdir("duplicate drums\\fx")
+    os.mkdir("duplicate drums\\vox")
+    os.mkdir("duplicate drums\\random")
+    onlyfiles = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f)) and f[len(f) - 4:len(f)] == ".wav"]
     #copy all the files into one of the new folders, and hide copied files so the symbolic links can still find them
     for f in onlyfiles:
         copyfile(dir_path + f, dir_path + filterName(f) + "\\" + f)
-
+        loader += 1            
+        if loader % 50 == 0:
+            printLoad(loader)
+        
     for f in onlyfiles:
-        system("attrib +h \"" + dir_path + f + "\"") 
+        os.system("attrib +h \"" + dir_path + f + "\"") 
 
 def filterName(wavName):
     wavName = wavName.lower()
@@ -167,17 +217,17 @@ def filterName(wavName):
         
     return "random"
     
-def handleThisDir(dirName):
+def handleThisDir(dirname):
     global dirsExplored
     global filesChecked
     global q
     
     dirsExplored = dirsExplored + 1
-    onlyfiles = [(join(dirName, f), getsize(join(dirName, f))) for f in listdir(dirName) if isfile(join(dirName, f)) and f[len(f) - 4:len(f)] == ".wav"]
+    onlyfiles = [(os.path.join(dirname, f), os.path.getsize(os.path.join(dirname, f))) for f in os.listdir(dirname) if os.path.isfile(os.path.join(dirname, f)) and f[len(f) - 4:len(f)] == ".wav"]
     for strx in onlyfiles:
         filesChecked = filesChecked + 1
         hashImpl(strx)
-    onlyDirs = [join(dirName, f) for f in listdir(dirName) if not isfile(join(dirName, f))]
+    onlyDirs = [os.path.join(dirname, f) for f in os.listdir(dirname) if not os.path.isfile(os.path.join(dirname, f))]
     for dir in onlyDirs:
         q.put(dir)
     
