@@ -5,6 +5,7 @@ DrumPy is a python script made to remove the redundancy caused by "different" dr
 ## Requirements
 
 Python 2.6 - 3.8
+Windows 10
 
 ## Installation
 
